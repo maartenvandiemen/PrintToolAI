@@ -25,7 +25,7 @@ jobs:
       id: analyze
       uses: actions/ai-inference@v1
       with:
-        prompt-file: '.github/models/failed-run-analyze.prompt.yml'
+        prompt-file: '.github/prompts/failed-run-analyze.prompt.yml'
         enable-github-mcp: true
         token: ${{ secrets.GITHUB_TOKEN }}
         github-mcp-token: ${{ secrets.AUTO_REMEDIATION_PAT }}
