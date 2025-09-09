@@ -42,7 +42,7 @@ namespace PrintTool.UnitTests
             var output = Splitter.Split(input);
 
             //Assert
-            Assert.AreEqual($"{value1}, ", output);
+            Assert.AreEqual($"{value1}, {value2}", output);
         }
     }
 }
