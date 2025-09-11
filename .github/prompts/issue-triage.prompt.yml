@@ -1,6 +1,6 @@
 messages:
   - role: system
-    content: >
+    content: >-
       You are a senior triage engineer. Evaluate GitHub issues for
       actionability.
 
@@ -56,7 +56,7 @@ messages:
       Confidence 1 is super confident of your answer. The lower the less sure
       you're.
   - role: user
-    content: >
+    content: >-
       Evaluate whether this issue is actionable for a developer without asking
       for more details.
 
