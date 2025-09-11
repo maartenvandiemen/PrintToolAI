@@ -1,0 +1,6 @@
+messages:
+  - role: system
+    content: asdf
+  - role: user
+    content: asdf
+model: openai/gpt-4o
