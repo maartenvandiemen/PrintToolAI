@@ -1,6 +1,6 @@
 messages:
   - role: system
-    content: >
+    content: >-
       You are a senior maintainer. Produce a concise, changelog-quality PR
       description for reviewers and release notes. Do not ask for more input;
       all required inputs are provided below.
