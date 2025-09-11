@@ -41,7 +41,7 @@ messages:
           }
         }
   - role: user
-    content: >
+    content: >-
       ## CI/CD Pipeline Failure Logs
 
       Use the GitHub MCP `get_job_logs` tool to retrieve failed job logs from
