@@ -1,0 +1,203 @@
+name: Judge and Summarize PR with AI
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize]
+
+permissions:
+  contents: read
+  pull-requests: write
+  models: read
+
+jobs:
+  judge-summary:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Collect PR data (summary, title, labels, files, commits) and write diff/context files
+        id: pr_info
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const pull_number = context.payload.pull_request.number;
+
+            // Helper to indent all lines
+            function indentMultiline(text, spaces = 8) {
+              const prefix = ' '.repeat(spaces);
+              return (text || '')
+                .replace(/\r\n/g, '\n')
+                .replace(/\r/g, '\n')
+                .split('\n')
+                .map(line => prefix + line)
+                .join('\n');
+            }
+
+            // PR metadata
+            const pr = await github.rest.pulls.get({ owner, repo, pull_number });
+
+            // Diff (as a file)
+            const diffResp = await github.rest.pulls.get({
+              owner, repo, pull_number,
+              mediaType: { format: "diff" }
+            });
+            fs.writeFileSync('pr.diff', indentMultiline(diffResp.data), 'utf8');
+
+            // Labels
+            const labels = (pr.data.labels || []).map(l => l.name);
+
+            // Files changed (summarized)
+            const files = await github.paginate(github.rest.pulls.listFiles, { owner, repo, pull_number });
+            const filePaths = files.map(f => `${f.status.padEnd(8)} ${f.filename}`);
+
+            // Commits (subjects only)
+            const commits = await github.paginate(github.rest.pulls.listCommits, { owner, repo, pull_number });
+            const commitSubjects = commits.map(c => `- ${c.commit.message.split('\n')[0]}`);
+
+            const additionalContext = [
+              `PR #${pull_number}: ${pr.data.title}`,
+              labels.length ? `Labels: ${labels.join(', ')}` : 'Labels: (none)',
+              '',
+              'Changed files:',
+              ...filePaths.slice(0, 200), // safeguard for very large PRs
+              '',
+              'Commit subjects:',
+              ...commitSubjects.slice(0, 200),
+              ''].join('\n');
+
+            fs.writeFileSync('additional_context.txt', indentMultiline(additionalContext), 'utf8');
+
+            core.setOutput('summary', pr.data.body || '');
+            core.setOutput('title', pr.data.title || '');
+            core.setOutput('labels', labels.join(', '));
+
+      - name: Judge PR summary with AI (structured response)
+        id: ai_judge
+        uses: actions/ai-inference@v1
+        with:
+          model: openai/gpt-4o
+          prompt-file: .github/prompts/judge-summary.prompt.yml
+          input: |
+            title: ${{ steps.pr_info.outputs.title }}
+            summary: ${{ steps.pr_info.outputs.summary }}
+            labels: ${{ steps.pr_info.outputs.labels }}
+          file_input: |
+            diff: pr.diff
+            additional_context: additional_context.txt
+
+      - name: Parse judge decision
+        id: judge_result
+        uses: actions/github-script@v7
+        env:
+          RESPONSE_INLINE: ${{ steps.ai_judge.outputs.response }}
+        with:
+          script: |
+            const inline = process.env.RESPONSE_INLINE ?? '';
+      
+            if (!inline.trim()) {
+              core.warning('Model inline response is empty.');
+              core.setOutput('decision', '');
+              core.setOutput('rationale', '');
+              return;
+            }
+      
+            let obj = null;
+            try { obj = JSON.parse(inline); } catch {}
+            
+            if (!obj) {
+              core.warning('Failed to parse inline model response as JSON.');
+              core.setOutput('decision', '');
+              core.setOutput('rationale', '');
+              return;
+            }
+      
+            const valid = new Set(['fit', 'not_fit']);
+            const decision = typeof obj.decision === 'string' && valid.has(obj.decision) ? obj.decision : '';
+            const rationale = typeof obj.rationale === 'string' ? obj.rationale : '';
+      
+            if (!decision) {
+              core.warning(`Invalid or missing "decision" in model response. Expected one of: ${[...valid].join(', ')}.`);
+            }
+      
+            core.setOutput('decision', decision);
+            core.setOutput('rationale', rationale);
+
+      - name: Generate improved summary (only if not fit)
+        id: ai_summary
+        if: steps.judge_result.outputs.decision == 'not_fit'
+        uses: actions/ai-inference@v1
+        with:
+          model: openai/gpt-4o
+          prompt-file: .github/prompts/generate-summary.prompt.yml
+          input: |
+            title: ${{ steps.pr_info.outputs.title }}
+          file_input: |
+            diff: pr.diff
+            additional_context: additional_context.txt
+
+      - name: Upsert summary comment on PR
+        if: steps.judge_result.outputs.decision == 'not_fit'
+        uses: actions/github-script@v7
+        env:
+          RATIONALE: ${{ steps.judge_result.outputs.rationale }}
+          SUMMARY: ${{ steps.ai_summary.outputs.response }}
+        with:
+          script: |
+            const marker = '<!-- AI_PR_SUMMARY -->';
+            const rationale = process.env.RATIONALE ?? '';
+            const summary = process.env.SUMMARY ?? '';
+      
+            const body = [
+              marker,
+              '',
+              'AI review result: the original PR summary did not fit the changes.',
+              '',
+              '**Why:**',
+              '```',
+              rationale,
+              '```',
+              '',
+              '**Suggested summary:**',
+              '',
+              summary
+            ].join('\n');
+      
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const pr_number = context.payload.pull_request.number;
+      
+            // Get all comments on this PR
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner,
+              repo,
+              issue_number: pr_number,
+              per_page: 100
+            });
+      
+            // Find our previous summary comment (by marker)
+            const previous = comments.find(c => c.body && c.body.includes(marker));
+      
+            if (previous) {
+              // Update the existing comment
+              await github.rest.issues.updateComment({
+                owner,
+                repo,
+                comment_id: previous.id,
+                body
+              });
+              core.info(`Updated existing summary comment (ID: ${previous.id})`);
+            } else {
+              // Create a new summary comment
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: pr_number,
+                body
+              });
+              core.info('Created new summary comment.');
+            }
