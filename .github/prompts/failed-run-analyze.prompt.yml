@@ -21,9 +21,41 @@ messages:
       timeouts, service unavailability) - Code quality issues (linting,
       formatting)
 
-      Provide your analysis in JSON.
+      Provide your analysis in JSON that strictly complies with the specified JSON schema below. 
+      Your output must be valid according to this schema and include clear, actionable recommendations:
+        {
+          "name": "failure_analysis",
+          "strict": true,
+          "schema": {
+            "type": "object",
+            "properties": {
+              "transient": { "type": "boolean" },
+              "summary": { "type": "string" },
+              "plan": { "type": "string" },
+              "category": {
+                "type": "string",
+                "enum": ["code","test","config","dependency","infrastructure","quality","repeat-transient"]
+              }
+            },
+            "required": ["transient","summary","plan","category"],
+            "additionalProperties": false
+          }
+        }
   - role: user
     content: >-
       ## CI/CD Pipeline Failure Logs
 
-      To know what we can do you return a list of all MCP tools that you can call.
+      IMPORTANT: You MUST use the GitHub MCP tools to retrieve and analyze the failed job logs.
+
+      Step 1: Use the GitHub MCP `get_job_logs` tool to retrieve failed job logs from
+      the specified workflow run:
+        - owner: {{owner}}
+        - repo: {{repo}}
+        - run_id: {{workflow_run_id}}
+
+      Step 2: Analyze the failure logs and provide a comprehensive assessment including
+      whether this is a transient failure, or if it requires code changes. If
+      code changes are needed, provide a detailed remediation plan. Keep the
+      summary short and DO NOT include the entire build log.
+
+      You MUST call the tools - do not ask the user to provide logs manually.

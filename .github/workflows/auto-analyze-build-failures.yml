@@ -31,6 +31,7 @@ jobs:
         enable-github-mcp: true
         token: ${{ secrets.GITHUB_TOKEN }}
         github-mcp-token: ${{ secrets.AUTO_REMEDIATION_PAT }}
+        github-mcp-toolsets: "context,repos,issues,pull_requests,users,actions"
         max-tokens: 10000
         input: |
           repo: ${{ github.event.repository.name }}
