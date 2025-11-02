@@ -14,11 +14,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Collect PR data (summary, title, labels, files, commits) and write diff/context files
         id: pr_info
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             const fs = require('fs');
@@ -27,10 +27,12 @@ jobs:
             const repo = context.repo.repo;
             const pull_number = context.payload.pull_request.number;
 
-            // Helper to indent all lines
+            // Helper to indent all lines safely
             function indentMultiline(text, spaces = 8) {
               const prefix = ' '.repeat(spaces);
-              return (text || '')
+              // Ensure text is a string and handle null/undefined
+              const safeText = String(text || '');
+              return safeText
                 .replace(/\r\n/g, '\n')
                 .replace(/\r/g, '\n')
                 .split('\n')
@@ -41,26 +43,34 @@ jobs:
             // PR metadata
             const pr = await github.rest.pulls.get({ owner, repo, pull_number });
 
-            // Diff (as a file)
+            // Diff (as a file) - safe as it's written to file
             const diffResp = await github.rest.pulls.get({
               owner, repo, pull_number,
               mediaType: { format: "diff" }
             });
             fs.writeFileSync('pr.diff', indentMultiline(diffResp.data), 'utf8');
 
-            // Labels
-            const labels = (pr.data.labels || []).map(l => l.name);
+            // Labels - sanitize each label name
+            const labels = (pr.data.labels || []).map(l => String(l.name || '').replace(/[\r\n]/g, ' '));
 
-            // Files changed (summarized)
+            // Files changed (summarized) - sanitize filenames
             const files = await github.paginate(github.rest.pulls.listFiles, { owner, repo, pull_number });
-            const filePaths = files.map(f => `${f.status.padEnd(8)} ${f.filename}`);
+            const filePaths = files.map(f => {
+              const status = String(f.status || '').padEnd(8);
+              const filename = String(f.filename || '').replace(/[\r\n]/g, ' ');
+              return `${status} ${filename}`;
+            });
 
-            // Commits (subjects only)
+            // Commits (subjects only) - sanitize commit messages
             const commits = await github.paginate(github.rest.pulls.listCommits, { owner, repo, pull_number });
-            const commitSubjects = commits.map(c => `- ${c.commit.message.split('\n')[0]}`);
+            const commitSubjects = commits.map(c => {
+              const msg = String(c.commit?.message || '');
+              const subject = msg.split('\n')[0].replace(/[\r\n]/g, ' ');
+              return `- ${subject}`;
+            });
 
             const additionalContext = [
-              `PR #${pull_number}: ${pr.data.title}`,
+              `PR #${pull_number}: ${String(pr.data.title || '').replace(/[\r\n]/g, ' ')}`,
               labels.length ? `Labels: ${labels.join(', ')}` : 'Labels: (none)',
               '',
               'Changed files:',
@@ -72,27 +82,32 @@ jobs:
 
             fs.writeFileSync('additional_context.txt', indentMultiline(additionalContext), 'utf8');
 
-            core.setOutput('summary', pr.data.body || '');
-            core.setOutput('title', pr.data.title || '');
+            // Sanitize outputs to prevent newline injection
+            core.setOutput('summary', String(pr.data.body || '').replace(/[\r\n]/g, ' '));
+            core.setOutput('title', String(pr.data.title || '').replace(/[\r\n]/g, ' '));
             core.setOutput('labels', labels.join(', '));
 
       - name: Judge PR summary with AI (structured response)
         id: ai_judge
         uses: actions/ai-inference@v1
+        env:
+          PR_TITLE: ${{ steps.pr_info.outputs.title }}
+          PR_SUMMARY: ${{ steps.pr_info.outputs.summary }}
+          PR_LABELS: ${{ steps.pr_info.outputs.labels }}
         with:
           model: openai/gpt-4o
           prompt-file: .github/prompts/judge-summary.prompt.yml
           input: |
-            title: ${{ steps.pr_info.outputs.title }}
-            summary: ${{ steps.pr_info.outputs.summary }}
-            labels: ${{ steps.pr_info.outputs.labels }}
+            title: ${{ env.PR_TITLE }}
+            summary: ${{ env.PR_SUMMARY }}
+            labels: ${{ env.PR_LABELS }}
           file_input: |
             diff: pr.diff
             additional_context: additional_context.txt
 
       - name: Parse judge decision
         id: judge_result
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         env:
           RESPONSE_INLINE: ${{ steps.ai_judge.outputs.response }}
         with:
@@ -131,18 +146,20 @@ jobs:
         id: ai_summary
         if: steps.judge_result.outputs.decision == 'not_fit'
         uses: actions/ai-inference@v1
+        env:
+          PR_TITLE: ${{ steps.pr_info.outputs.title }}
         with:
           model: openai/gpt-4o
           prompt-file: .github/prompts/generate-summary.prompt.yml
           input: |
-            title: ${{ steps.pr_info.outputs.title }}
+            title: ${{ env.PR_TITLE }}
           file_input: |
             diff: pr.diff
             additional_context: additional_context.txt
 
       - name: Upsert summary comment on PR
         if: steps.judge_result.outputs.decision == 'not_fit'
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         env:
           RATIONALE: ${{ steps.judge_result.outputs.rationale }}
           SUMMARY: ${{ steps.ai_summary.outputs.response }}

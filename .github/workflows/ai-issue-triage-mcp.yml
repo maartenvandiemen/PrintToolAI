@@ -26,10 +26,10 @@ jobs:
       cancel-in-progress: true
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Set repo name output
         id: get-repo-name
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             core.setOutput('repo_name', context.repo.repo);
@@ -49,7 +49,7 @@ jobs:
 
       - name: Apply triage outcome (labels + comment)
         if: success()
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         env:
           AI: ${{ steps.ai.outputs.response }}
           READY_LABEL: ${{ env.READY_LABEL }}

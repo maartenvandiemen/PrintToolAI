@@ -27,20 +27,22 @@ jobs:
       cancel-in-progress: true
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Prepare inputs (issue + comments)
         id: prep
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const fs = require('fs');
 
-            // Helper to indent all lines
+            // Helper to indent all lines safely
             function indentMultiline(text, spaces = 8) {
               const prefix = ' '.repeat(spaces);
-              return (text || '')
+              // Ensure text is a string and handle null/undefined
+              const safeText = String(text || '');
+              return safeText
                 .replace(/\r\n/g, '\n')
                 .replace(/\r/g, '\n')
                 .split('\n')
@@ -52,10 +54,11 @@ jobs:
             const issue = context.payload.issue;
             const issue_number = issue.number;
             
-            // Title/output
-            core.setOutput('title', issue.title || '');
+            // Title/output - sanitize to prevent injection
+            const safeTitle = String(issue.title || '').replace(/[\r\n]/g, ' ');
+            core.setOutput('title', safeTitle);
             
-            // Issue body file
+            // Issue body file - write directly from payload (safe as it's written to file)
             const bodyIndented = indentMultiline(issue.body || '');
             fs.writeFileSync('issue_body.txt', bodyIndented, 'utf8');
             
@@ -67,22 +70,30 @@ jobs:
             
             const formatted = comments
               .filter(c => c.user?.type !== 'Bot' && c.user?.login !== 'github-actions[bot]')
-              .map(c => `----\n@${c.user.login} (${c.created_at})\n\n${c.body ?? ''}`)
+              .map(c => {
+                // Sanitize user data
+                const login = String(c.user?.login || 'unknown');
+                const date = String(c.created_at || '');
+                const body = String(c.body || '');
+                return `----\n@${login} (${date})\n\n${body}`;
+              })
               .join('\n');
             
             const commentsIndented = formatted.trim().length === 0
               ? indentMultiline('No comments.')
               : indentMultiline(formatted.trim());
-              fs.writeFileSync('issue_comments.txt', commentsIndented, 'utf8');
+            fs.writeFileSync('issue_comments.txt', commentsIndented, 'utf8');
 
       - name: Run AI inference with prompt file
         id: ai
         uses: actions/ai-inference@v1
+        env:
+          ISSUE_TITLE: ${{ steps.prep.outputs.title }}
         with:
           model: ${{ env.MODEL }}
           prompt-file: .github/prompts/issue-triage.prompt.yml
           input: |
-            title: ${{ steps.prep.outputs.title }}
+            title: ${{ env.ISSUE_TITLE }}
           file_input: |
             body: issue_body.txt
             comments: issue_comments.txt
@@ -90,7 +101,7 @@ jobs:
 
       - name: Apply triage outcome (labels + comment)
         if: success()
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         env:
           AI: ${{ steps.ai.outputs.response }}
           READY_LABEL: ${{ env.READY_LABEL }}
