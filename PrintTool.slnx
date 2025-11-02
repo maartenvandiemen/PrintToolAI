@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="PrintTool.UnitTests/PrintTool.UnitTests.csproj" />
+  <Project Path="PrintTool/PrintTool.csproj" />
+</Solution>

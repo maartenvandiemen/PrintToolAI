@@ -16,20 +16,22 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Set repo name output
         id: get-repo-name
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             core.setOutput('repo_name', context.repo.repo);
       - name: Run AI assessment
         id: ai-assessment
         uses: github/ai-assessment-comment-labeler@main
+        env:
+          ISSUE_BODY: ${{ github.event.issue.body }}
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           issue_number: ${{ github.event.issue.number }}
-          issue_body: ${{ github.event.issue.body }}
+          issue_body: ${{ env.ISSUE_BODY }}
           repo_name: ${{ steps.get-repo-name.outputs.repo_name }}
           owner: ${{ github.repository_owner }}
           ai_review_label: 'request ai review'
