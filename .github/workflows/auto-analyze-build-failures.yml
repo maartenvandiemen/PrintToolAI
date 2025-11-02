@@ -7,7 +7,7 @@ on:
 
 permissions:
   contents: read
-  actions: write
+  actions: read
   issues: write
   pull-requests: read
   models: read
@@ -137,29 +137,28 @@ jobs:
       run: |
         category="${{ steps.parse.outputs.category }}"
         issue_number="${{ steps.create-issue.outputs.issue_number }}"
+        
         if [[ "$category" == "code" || "$category" == "test" || "$category" == "config" ]]; then
           echo "Assigning issue #$issue_number to Copilot"
-          # Query suggested actors to find Copilot agent id
-          copilot_query='query {
-            repository(owner: "${{ github.event.repository.owner.login }}", name: "${{ github.event.repository.name }}") {
-              suggestedActors(capabilities: [CAN_BE_ASSIGNED], first: 100) {
-                nodes { login __typename ... on Bot { id } }
+          
+          # Check if Copilot is available in this repository
+          copilot_available=$(gh api graphql -f query='
+            query {
+              repository(owner: "${{ github.event.repository.owner.login }}", name: "${{ github.event.repository.name }}") {
+                suggestedActors(capabilities: [CAN_BE_ASSIGNED], first: 100) {
+                  nodes { login __typename ... on Bot { id } }
+                }
               }
-            }
-          }'
-          copilot_response=$(gh api graphql -f query="$copilot_query")
-          copilot_id=$(echo "$copilot_response" | jq -r '.data.repository.suggestedActors.nodes[] | select(.login == "copilot-swe-agent") | .id')
-          if [[ -n "$copilot_id" && "$copilot_id" != "null" ]]; then
-            issue_query='query { repository(owner: "${{ github.event.repository.owner.login }}", name: "${{ github.event.repository.name }}") { issue(number: '$issue_number') { id } } }'
-            issue_response=$(gh api graphql -f query="$issue_query")
-            issue_id=$(echo "$issue_response" | jq -r '.data.repository.issue.id')
-            assign_mutation='mutation { replaceActorsForAssignable(input: {assignableId: "'$issue_id'", actorIds: ["'$copilot_id'"]}) { assignable { ... on Issue { id } } } }'
-            gh api graphql -f query="$assign_mutation" >/dev/null 2>&1 || echo "Copilot assignment failed"
+            }' --jq '.data.repository.suggestedActors.nodes[] | select(.login == "copilot-swe-agent") | .login')
+          
+          if [[ -n "$copilot_available" ]]; then
+            gh issue edit "$issue_number" --add-assignee @copilot \
+              --repo "${{ github.repository }}" || echo "Copilot assignment failed"
           else
             echo "Copilot agent not available in this repository"
           fi
-         else
-           echo "Category '$category' does not require Copilot assignment"
-         fi
+        else
+          echo "Category '$category' does not require Copilot assignment"
+        fi
       env:
         GH_TOKEN: ${{ secrets.AUTO_REMEDIATION_PAT }}
