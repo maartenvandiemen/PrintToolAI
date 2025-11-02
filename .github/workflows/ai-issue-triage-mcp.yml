@@ -35,7 +35,7 @@ jobs:
             core.setOutput('repo_name', context.repo.repo);
       - name: Run AI inference with prompt file
         id: ai
-        uses: actions/ai-inference@v2
+        uses: maartenvandiemen/ai-inference@feature/pass-toolsets
         with:
           prompt-file: .github/prompts/issue-triage-mcp.prompt.yml
           input: |
@@ -46,6 +46,7 @@ jobs:
           enable-github-mcp: true
           token: ${{ secrets.GITHUB_TOKEN }}
           github-mcp-token: ${{ secrets.AUTO_REMEDIATION_PAT }}
+          github-mcp-toolsets: "context,repos,issues,pull_requests,users,actions"
 
       - name: Apply triage outcome (labels + comment)
         if: success()
