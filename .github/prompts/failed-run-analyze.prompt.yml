@@ -1,5 +1,6 @@
 name: Failed Run Autofix
 model: openai/gpt-4.1
+responseFormat: json_object
 messages:
   - role: system
     content: >-
