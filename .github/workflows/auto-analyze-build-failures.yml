@@ -23,7 +23,7 @@ jobs:
 
     - name: Analyze build failure
       id: analyze
-      uses: actions/ai-inference@v1
+      uses: actions/ai-inference@v2
       with:
         prompt-file: '.github/prompts/failed-run-analyze.prompt.yml'
         enable-github-mcp: true

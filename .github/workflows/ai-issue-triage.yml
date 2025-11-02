@@ -86,7 +86,7 @@ jobs:
 
       - name: Run AI inference with prompt file
         id: ai
-        uses: actions/ai-inference@v1
+        uses: actions/ai-inference@v2
         env:
           ISSUE_TITLE: ${{ steps.prep.outputs.title }}
         with:

@@ -89,7 +89,7 @@ jobs:
 
       - name: Judge PR summary with AI (structured response)
         id: ai_judge
-        uses: actions/ai-inference@v1
+        uses: actions/ai-inference@v2
         env:
           PR_TITLE: ${{ steps.pr_info.outputs.title }}
           PR_SUMMARY: ${{ steps.pr_info.outputs.summary }}
@@ -145,7 +145,7 @@ jobs:
       - name: Generate improved summary (only if not fit)
         id: ai_summary
         if: steps.judge_result.outputs.decision == 'not_fit'
-        uses: actions/ai-inference@v1
+        uses: actions/ai-inference@v2
         env:
           PR_TITLE: ${{ steps.pr_info.outputs.title }}
         with:

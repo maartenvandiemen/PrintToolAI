@@ -35,7 +35,7 @@ jobs:
             core.setOutput('repo_name', context.repo.repo);
       - name: Run AI inference with prompt file
         id: ai
-        uses: actions/ai-inference@v1
+        uses: actions/ai-inference@v2
         with:
           prompt-file: .github/prompts/issue-triage-mcp.prompt.yml
           input: |
