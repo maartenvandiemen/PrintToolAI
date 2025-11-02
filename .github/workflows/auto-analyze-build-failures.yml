@@ -24,6 +24,8 @@ jobs:
     - name: Analyze build failure
       id: analyze
       uses: actions/ai-inference@v2
+      env:
+        GITHUB_TOOLSETS: "context,repos,issues,pull_requests,actions"
       with:
         prompt-file: '.github/prompts/failed-run-analyze.prompt.yml'
         enable-github-mcp: true
@@ -48,10 +50,12 @@ jobs:
             return;
           }
           const responseJSON = JSON.parse(responseString);
-          core.setOutput('category', responseJSON.category || '');
-          core.setOutput('summary', responseJSON.summary || '');
-          core.setOutput('plan', responseJSON.plan || '');
-          core.setOutput('transient', responseJSON.transient || 'false');
+          // Handle nested schema structure if present
+          const data = responseJSON.schema || responseJSON;
+          core.setOutput('category', data.category || '');
+          core.setOutput('summary', data.summary || '');
+          core.setOutput('plan', data.plan || '');
+          core.setOutput('transient', data.transient || 'false');
 
     - name: Check for existing remediation issue
       if: ${{ steps.parse.outputs.transient == 'false' }}
