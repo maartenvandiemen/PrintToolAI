@@ -23,7 +23,7 @@ jobs:
 
     - name: Analyze build failure
       id: analyze
-      uses: actions/ai-inference@v2
+      uses: maartenvandiemen/ai-inference@feature/pass-toolsets
       env:
         GITHUB_TOOLSETS: "context,repos,issues,pull_requests,actions"
       with:
