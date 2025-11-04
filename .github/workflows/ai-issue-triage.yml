@@ -1,0 +1,227 @@
+name: AI Issue Triage
+
+on:
+  issues:
+    types: [opened, edited]
+  issue_comment:
+    types: [created, edited]
+
+permissions:
+  contents: read
+  issues: write
+  models: read
+
+env:
+  MODEL: openai/gpt-4o-mini
+  READY_LABEL: ready-for-dev
+  TRIAGED_LABEL: triaged
+  NEEDS_INFO_LABEL: needs-more-info
+  AI_LABEL: ai-triage
+
+jobs:
+  triage:
+    if: ${{ !contains(github.event.issue.labels.*.name, 'no-ai-triage') }}
+    runs-on: ubuntu-latest
+    concurrency:
+      group: issue-ai-triage-${{ github.event.issue.number }}
+      cancel-in-progress: true
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Prepare inputs (issue + comments)
+        id: prep
+        uses: actions/github-script@v8
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('fs');
+
+            // Helper to indent all lines safely
+            function indentMultiline(text, spaces = 8) {
+              const prefix = ' '.repeat(spaces);
+              // Ensure text is a string and handle null/undefined
+              const safeText = String(text || '');
+              return safeText
+                .replace(/\r\n/g, '\n')
+                .replace(/\r/g, '\n')
+                .split('\n')
+                .map(line => prefix + line)
+                .join('\n');
+            }
+            
+            const { owner, repo } = context.repo;
+            const issue = context.payload.issue;
+            const issue_number = issue.number;
+            
+            // Title/output - sanitize to prevent injection
+            const safeTitle = String(issue.title || '').replace(/[\r\n]/g, ' ');
+            core.setOutput('title', safeTitle);
+            
+            // Issue body file - write directly from payload (safe as it's written to file)
+            const bodyIndented = indentMultiline(issue.body || '');
+            fs.writeFileSync('issue_body.txt', bodyIndented, 'utf8');
+            
+            // Fetch all comments (paginate) and exclude bots to avoid loops/noise
+            const comments = await github.paginate(
+              github.rest.issues.listComments,
+              { owner, repo, issue_number, per_page: 100 }
+            );
+            
+            const formatted = comments
+              .filter(c => c.user?.type !== 'Bot' && c.user?.login !== 'github-actions[bot]')
+              .map(c => {
+                // Sanitize user data
+                const login = String(c.user?.login || 'unknown');
+                const date = String(c.created_at || '');
+                const body = String(c.body || '');
+                return `----\n@${login} (${date})\n\n${body}`;
+              })
+              .join('\n');
+            
+            const commentsIndented = formatted.trim().length === 0
+              ? indentMultiline('No comments.')
+              : indentMultiline(formatted.trim());
+            fs.writeFileSync('issue_comments.txt', commentsIndented, 'utf8');
+
+      - name: Run AI inference with prompt file
+        id: ai
+        uses: actions/ai-inference@v2
+        env:
+          ISSUE_TITLE: ${{ steps.prep.outputs.title }}
+        with:
+          model: ${{ env.MODEL }}
+          prompt-file: .github/prompts/issue-triage.prompt.yml
+          input: |
+            title: ${{ env.ISSUE_TITLE }}
+          file_input: |
+            body: issue_body.txt
+            comments: issue_comments.txt
+          max-tokens: 1000
+
+      - name: Apply triage outcome (labels + comment)
+        if: success()
+        uses: actions/github-script@v8
+        env:
+          AI: ${{ steps.ai.outputs.response }}
+          READY_LABEL: ${{ env.READY_LABEL }}
+          TRIAGED_LABEL: ${{ env.TRIAGED_LABEL }}
+          NEEDS_INFO_LABEL: ${{ env.NEEDS_INFO_LABEL }}
+          AI_LABEL: ${{ env.AI_LABEL }}
+          UNABLE_TO_PARSE_LABEL: 'Parse error' 
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const issue_number = context.payload.issue.number;
+
+            const READY_LABEL = process.env.READY_LABEL;
+            const TRIAGED_LABEL = process.env.TRIAGED_LABEL;
+            const NEEDS_INFO_LABEL = process.env.NEEDS_INFO_LABEL;
+            const AI_SYS_LABEL = process.env.AI_LABEL;
+
+            async function addLabels(labels) {
+              const list = Array.from(new Set((labels || []).filter(l => typeof l === 'string' && l.trim() !== '')));
+              if (!list.length) return;
+              try {
+                await github.rest.issues.addLabels({
+                  owner, repo, issue_number,
+                  labels: list
+                });
+              } catch (e) {
+                core.warning(`Failed to add labels ${JSON.stringify(list)}: ${e.message}`);
+              }
+            }
+
+            async function removeLabel(name) {
+              if (!name) return;
+              try {
+                await github.rest.issues.removeLabel({
+                  owner, repo, issue_number,
+                  name
+                });
+              } catch (e) {
+                if (e.status !== 404) {
+                  core.warning(`Failed to remove label ${name}: ${e.message}`);
+                }
+              }
+            }
+
+            async function comment(body) {
+              if (!body) return;
+              await github.rest.issues.createComment({
+                owner, repo, issue_number,
+                body
+              });
+            }
+
+            const aiRaw = process.env.AI;
+            if (!aiRaw || aiRaw.trim() === '' || aiRaw === 'null') {
+              // Empty response: add needs info + AI label
+              await addLabels([NEEDS_INFO_LABEL, AI_SYS_LABEL]);
+              return;
+            }
+
+            let ai;
+            try {
+              ai = JSON.parse(aiRaw);
+            } catch {
+              // Parsing failed: treat as empty
+              await addLabels([NEEDS_INFO_LABEL, AI_SYS_LABEL, UNABLE_TO_PARSE_LABEL]);
+              return;
+            }
+
+            const actionable = !!ai?.actionable;
+            const summary = (ai?.summary ?? '').toString();
+
+            // Base labels depending on actionability
+            const labelsToAdd = [];
+            if (actionable) {
+              labelsToAdd.push(READY_LABEL, TRIAGED_LABEL);
+            } else {
+              labelsToAdd.push(NEEDS_INFO_LABEL, AI_SYS_LABEL);
+            }
+
+            // Any suggested labels from AI
+            if (Array.isArray(ai?.labels)) {
+              for (const l of ai.labels) {
+                if (typeof l === 'string' && l.trim() !== '') labelsToAdd.push(l);
+              }
+            }
+
+            // Apply label additions
+            await addLabels(labelsToAdd);
+
+            if (actionable) {
+              // Remove mutually exclusive label
+              await removeLabel(NEEDS_INFO_LABEL);
+
+              // Comment concise summary
+              const body = `AI triage summary: ${summary}\n\nLabeling as: ${READY_LABEL}.`;
+              await comment(body);
+            } else {
+              // Remove mutually exclusive label
+              await removeLabel(READY_LABEL);
+
+              const missing = Array.isArray(ai?.missing) ? ai.missing : [];
+              const questions = Array.isArray(ai?.questions) ? ai.questions : [];
+
+              let body = "Thanks for opening this issue! I ran an automated triage to help our maintainers.\n\n";
+              if (summary) {
+                body += "Summary:\n" + summary + "\n\n";
+              }
+              if (missing.length > 0) {
+                body += "To help a developer pick this up, please provide:\n";
+                for (const m of missing) body += `- ${m}\n`;
+                body += "\n";
+              }
+              if (questions.length > 0) {
+                body += "Follow-up questions:\n";
+                for (const q of questions) body += `- ${q}\n`;
+                body += "\n";
+              }
+              body += `Once you've updated the issue, reply here and the bot will re-check. To bypass, a maintainer can add the "${READY_LABEL}" label.`;
+
+              await comment(body);
+            }
