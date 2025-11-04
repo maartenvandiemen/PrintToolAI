@@ -108,7 +108,6 @@ jobs:
           TRIAGED_LABEL: ${{ env.TRIAGED_LABEL }}
           NEEDS_INFO_LABEL: ${{ env.NEEDS_INFO_LABEL }}
           AI_LABEL: ${{ env.AI_LABEL }}
-          UNABLE_TO_PARSE_LABEL: 'Parse error' 
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
@@ -168,7 +167,7 @@ jobs:
               ai = JSON.parse(aiRaw);
             } catch {
               // Parsing failed: treat as empty
-              await addLabels([NEEDS_INFO_LABEL, AI_SYS_LABEL, UNABLE_TO_PARSE_LABEL]);
+              await addLabels([NEEDS_INFO_LABEL, AI_SYS_LABEL]);
               return;
             }
 
